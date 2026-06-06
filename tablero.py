@@ -1,10 +1,12 @@
 ﻿from __future__ import annotations
 
+from pathlib import Path
 from typing import Dict, Optional, Tuple
 
 import pygame
 
 from otelo import aplicar_movimiento, cuenta_fichas, movimientos_legales, nuevo_tablero
+from entrenamiento import DEFAULT_MODEL_PATH, RedNeuronalOthello, selecciona_movimiento
 
 Position = Tuple[int, int]
 
@@ -19,10 +21,19 @@ class TableroUI:
     BLACK_PIECE = (30, 30, 30)
     WHITE_PIECE = (235, 235, 235)
     LEGAL_MOVE_COLOR = (240, 240, 130)
+    PANEL_COLOR = (22, 30, 48)
+    PANEL_BORDER = (77, 132, 191)
+    BUTTON_COLOR = (36, 124, 76)
+    BUTTON_HOVER_COLOR = (46, 150, 92)
+    BUTTON_TEXT_COLOR = (245, 247, 249)
+    AI_MOVE_DELAY_MS = 1500
+
 
     CELL_SIZE = 80
     HEADER_HEIGHT = 100
     FPS = 60
+    HUMAN_PLAYER = 2
+    AI_PLAYER = 1
 
     def __init__(self) -> None:
         self.board_size = 8
@@ -32,10 +43,18 @@ class TableroUI:
         self.clock: Optional[pygame.time.Clock] = None
         self.font: Optional[pygame.font.Font] = None
 
+        self.human_player = self.HUMAN_PLAYER
+        self.ai_player = self.AI_PLAYER
         self.current_player = 2
         self.legal_moves: Dict[Position, list[Position]] = {}
         self.game_over = False
-        self.message = ""
+        self.model_path = DEFAULT_MODEL_PATH
+        self.model: Optional[RedNeuronalOthello] = self._load_model(self.model_path)
+        self.awaiting_selection = True
+        self.message = "Pulsa N para jugar como Negro o B para jugar como Blanco."
+        self.start_button_black: Optional[pygame.Rect] = None
+        self.start_button_white: Optional[pygame.Rect] = None
+        self.pending_ai_move_at: Optional[int] = None
 
         self._refresh_game_state()
 
@@ -54,6 +73,7 @@ class TableroUI:
             assert self.clock is not None
             self.clock.tick(self.FPS)
             running = self._handle_events()
+            self._update_pending_ai_turn()
             self.draw_scene()
 
         pygame.quit()
@@ -67,12 +87,22 @@ class TableroUI:
                     return False
                 if event.key == pygame.K_r:
                     self._reset_game()
+                if self.awaiting_selection:
+                    if event.key == pygame.K_n:
+                        self._start_match(human_player=2)
+                    elif event.key == pygame.K_b:
+                        self._start_match(human_player=1)
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 self._handle_click(event.pos)
         return True
 
     def _handle_click(self, pos: Tuple[int, int]) -> None:
-        if self.game_over:
+        if self.awaiting_selection:
+            if self._handle_start_screen_click(pos):
+                return
+            return
+
+        if self.game_over or self.awaiting_selection or self.current_player != self.human_player:
             return
 
         board_pos = self._pixel_to_board(pos)
@@ -87,6 +117,7 @@ class TableroUI:
         self.current_player = 3 - self.current_player
         self.message = ""
         self._refresh_game_state()
+        self._schedule_ai_turn_if_needed()
 
     def _refresh_game_state(self) -> None:
         self.legal_moves = movimientos_legales(self.board, self.current_player)
@@ -111,33 +142,173 @@ class TableroUI:
             resultado = "Empate"
         self.message = f"Fin de partida — {resultado}"
 
+    def _schedule_ai_turn_if_needed(self) -> None:
+        if self.game_over or self.model is None or self.current_player != self.ai_player:
+            self.pending_ai_move_at = None
+            return
+
+        self.pending_ai_move_at = pygame.time.get_ticks() + self.AI_MOVE_DELAY_MS
+
+    def _update_pending_ai_turn(self) -> None:
+        if self.pending_ai_move_at is None:
+            return
+
+        if pygame.time.get_ticks() < self.pending_ai_move_at:
+            return
+
+        self.pending_ai_move_at = None
+        self._play_ai_turn_if_needed()
+
+    def _play_ai_turn_if_needed(self) -> None:
+        if self.game_over or self.model is None or self.current_player != self.ai_player:
+            return
+
+        seleccion = selecciona_movimiento(self.model, self.board, self.current_player)
+        if seleccion is None:
+            self._refresh_game_state()
+            return
+
+        movimiento, fichas_volteadas = seleccion
+        aplicar_movimiento(self.board, movimiento, self.current_player, fichas_volteadas)
+        self.current_player = 3 - self.current_player
+        self.message = "La IA ha jugado"
+        self._refresh_game_state()
+
     def _reset_game(self) -> None:
         self.board = nuevo_tablero()
         self.current_player = 2
         self.game_over = False
         self.message = ""
+        self.pending_ai_move_at = None
         self._refresh_game_state()
+
+        if self.model is not None and self.current_player == self.ai_player:
+            self._schedule_ai_turn_if_needed()
+
+    def _start_match(self, human_player: int) -> None:
+        self.human_player = human_player
+        self.ai_player = 3 - human_player
+        self.awaiting_selection = False
+        self._reset_game()
+
+    def _handle_start_screen_click(self, pos: Tuple[int, int]) -> bool:
+        if self.start_button_black and self.start_button_black.collidepoint(pos):
+            self._start_match(human_player=2)
+            return True
+
+        if self.start_button_white and self.start_button_white.collidepoint(pos):
+            self._start_match(human_player=1)
+            return True
+
+        return False
+
+    def _load_model(self, ruta: Path) -> Optional[RedNeuronalOthello]:
+        if not ruta.exists():
+            return RedNeuronalOthello()
+
+        try:
+            return RedNeuronalOthello.load(ruta)
+        except Exception as exc:  # pragma: no cover - defensivo para errores de carga
+            self.message = f"No se pudo cargar el modelo: {exc}"
+            return RedNeuronalOthello()
 
     def draw_scene(self) -> None:
         if self.screen is None:
             return
 
         self.screen.fill(self.BG_COLOR)
+        if self.awaiting_selection:
+            self.draw_start_screen()
+            pygame.display.flip()
+            return
+
         self.draw_header()
         self.draw_board()
         pygame.display.flip()
+
+    def draw_start_screen(self) -> None:
+        assert self.screen and self.font
+
+        width, height = self.compute_window_size()
+        panel_width = 520
+        panel_height = 290
+        panel_rect = pygame.Rect(
+            (width - panel_width) // 2,
+            (height - panel_height) // 2,
+            panel_width,
+            panel_height,
+        )
+        pygame.draw.rect(self.screen, self.PANEL_COLOR, panel_rect, border_radius=18)
+        pygame.draw.rect(self.screen, self.PANEL_BORDER, panel_rect, width=3, border_radius=18)
+
+        title_font = pygame.font.Font(None, 42)
+        title = title_font.render("Othello / Reversi", True, self.TEXT_COLOR)
+        self.screen.blit(title, (panel_rect.centerx - title.get_width() // 2, panel_rect.top + 28))
+
+        lines = [
+            "Elige cómo quieres jugar.",
+            "Haz clic en una opción para empezar.",
+            "También puedes pulsar N o B si la ventana tiene el foco.",
+        ]
+        for index, line in enumerate(lines):
+            surface = self.font.render(line, True, self.TEXT_COLOR)
+            self.screen.blit(surface, (panel_rect.left + 32, panel_rect.top + 92 + index * 28))
+
+        button_width = 180
+        button_height = 54
+        gap = 24
+        button_y = panel_rect.bottom - 86
+        black_rect = pygame.Rect(panel_rect.left + 58, button_y, button_width, button_height)
+        white_rect = pygame.Rect(black_rect.right + gap, button_y, button_width, button_height)
+        self.start_button_black = black_rect
+        self.start_button_white = white_rect
+
+        mouse_pos = pygame.mouse.get_pos()
+        for rect, label, detail in (
+            (black_rect, "Jugar Negro", "IA blanca"),
+            (white_rect, "Jugar Blanco", "IA negra"),
+        ):
+            color = self.BUTTON_HOVER_COLOR if rect.collidepoint(mouse_pos) else self.BUTTON_COLOR
+            pygame.draw.rect(self.screen, color, rect, border_radius=12)
+            pygame.draw.rect(self.screen, self.PANEL_BORDER, rect, width=2, border_radius=12)
+
+            label_surface = self.font.render(label, True, self.BUTTON_TEXT_COLOR)
+            detail_surface = self.font.render(detail, True, self.BUTTON_TEXT_COLOR)
+            self.screen.blit(
+                label_surface,
+                (rect.centerx - label_surface.get_width() // 2, rect.top + 7),
+            )
+            self.screen.blit(
+                detail_surface,
+                (rect.centerx - detail_surface.get_width() // 2, rect.top + 29),
+            )
 
     def draw_header(self) -> None:
         assert self.screen and self.font
 
         negro, blanco = cuenta_fichas(self.board)
-        turn_text = "Negro (X)" if self.current_player == 2 else "Blanco (O)"
+        if self.awaiting_selection:
+            turn_text = "Selecciona color"
+        elif self.current_player == self.human_player:
+            turn_text = "Tu turno"
+        elif self.model is not None:
+            turn_text = "Turno de la IA"
+        else:
+            turn_text = "Turno actual"
         header_lines = [
             f"Negro: {negro}    Blanco: {blanco}",
             f"Turno actual: {turn_text}",
             "Clic en un movimiento legal para colocar ficha.",
             "Presiona R para reiniciar, ESC para salir.",
         ]
+
+        if self.awaiting_selection:
+            header_lines = [
+                "Selecciona color antes de empezar.",
+                "Pulsa N para jugar como Negro (X) o B para jugar como Blanco (O).",
+                "Si existe modelo_otelo.npz, la IA tomará el color contrario.",
+                "Presiona ESC para salir.",
+            ]
 
         for index, line in enumerate(header_lines):
             surface = self.font.render(line, True, self.TEXT_COLOR)
@@ -191,4 +362,7 @@ class TableroUI:
 
 if __name__ == "__main__":
     ui = TableroUI()
-    ui.run()
+    try:
+        ui.run()
+    except KeyboardInterrupt:
+        pygame.quit()
