@@ -1,36 +1,37 @@
 import os
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Suprime logs verbosos de TensorFlow (si está instalado)
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
 import argparse
 import random
 from pathlib import Path
-from typing import Dict, List, Sequence, Tuple
+from typing import Any, List, Sequence, Tuple
 
 import numpy as np
+
+try:
+	import tensorflow as tf  # type: ignore[import-not-found]
+except ImportError as exc:  # pragma: no cover - depende del entorno
+	tf = None  # type: ignore[assignment]
+	_TENSORFLOW_IMPORT_ERROR = exc
+else:
+	_TENSORFLOW_IMPORT_ERROR = None
 
 from otelo import aplicar_movimiento, cuenta_fichas, movimientos_legales, nuevo_tablero
 
 
-# Fijar semillas para obtener resultados reproducibles durante pruebas
 random.seed(394867)
 np.random.seed(394867)
+if tf is not None:
+	tf.keras.utils.set_random_seed(394867)
 
 
-# Etiquetas usadas para el objetivo de la red: pérdida/empate/victoria
 LABEL_LOSS = 0
 LABEL_DRAW = 1
 LABEL_WIN = 2
-DEFAULT_MODEL_PATH = Path("modelo_otelo.npz")
+DEFAULT_MODEL_PATH = Path("modelo_otelo.keras")
 
 
 def codifica_tablero(tablero: Sequence[Sequence[int]], jugador: int) -> np.ndarray:
-	"""Convierte el tablero en un vector de 64 valores desde la perspectiva del jugador actual.
-
-	- 1.0 indica una ficha del jugador
-	- -1.0 indica una ficha del oponente
-	- 0.0 celda vacía
-	Esto sirve como entrada para la red neuronal.
-	"""
 	vector = np.zeros(64, dtype=np.float32)
 	indice = 0
 	for fila in tablero:
@@ -44,7 +45,6 @@ def codifica_tablero(tablero: Sequence[Sequence[int]], jugador: int) -> np.ndarr
 
 
 def resultado_desde_perspectiva(negro: int, blanco: int, jugador: int) -> int:
-	# Devuelve la etiqueta (LOSS/DRAW/WIN) desde la perspectiva de `jugador`.
 	if negro == blanco:
 		return LABEL_DRAW
 	if jugador == 2:
@@ -53,34 +53,24 @@ def resultado_desde_perspectiva(negro: int, blanco: int, jugador: int) -> int:
 
 
 def simula_partida_aleatoria() -> Tuple[List[np.ndarray], List[int]]:
-	"""Simula una partida completa con movimientos aleatorios.
-
-	Devuelve una lista de entradas (tableros codificados) y las etiquetas
-	correspondientes calculadas al final de la partida.
-	"""
 	tablero = nuevo_tablero()
-	jugador = 2  # empieza el jugador negro (convención interna)
+	jugador = 2
 	historico: List[Tuple[np.ndarray, int]] = []
 	pasadas_consecutivas = 0
 
-	# El juego termina cuando ambos jugadores pasan consecutivamente
 	while pasadas_consecutivas < 2:
 		movimientos = movimientos_legales(tablero, jugador)
 		if not movimientos:
-			# Si no hay movimientos válidos, el jugador pasa
 			pasadas_consecutivas += 1
 			jugador = 3 - jugador
 			continue
 
 		pasadas_consecutivas = 0
-		# Guardar la posición y el jugador que la jugó
 		historico.append((codifica_tablero(tablero, jugador), jugador))
-		# Elegir un movimiento aleatorio entre los legales
 		movimiento, fichas_volteadas = list(movimientos.items())[np.random.randint(len(movimientos))]
 		aplicar_movimiento(tablero, movimiento, jugador, fichas_volteadas)
 		jugador = 3 - jugador
 
-	# Al final de la partida calculamos el resultado y generamos las etiquetas
 	negro, blanco = cuenta_fichas(tablero)
 	entradas = [entrada for entrada, _ in historico]
 	labels = [resultado_desde_perspectiva(negro, blanco, jugador_historico) for _, jugador_historico in historico]
@@ -88,9 +78,6 @@ def simula_partida_aleatoria() -> Tuple[List[np.ndarray], List[int]]:
 
 
 def genera_dataset(num_partidas: int) -> Tuple[np.ndarray, np.ndarray]:
-	"""Genera `num_partidas` partidas aleatorias y construye matrices numpy
-	`x` (entradas) e `y` (etiquetas) listas para entrenar la red.
-	"""
 	entradas: List[np.ndarray] = []
 	labels: List[int] = []
 
@@ -102,163 +89,88 @@ def genera_dataset(num_partidas: int) -> Tuple[np.ndarray, np.ndarray]:
 	if not entradas:
 		raise RuntimeError("No se generaron ejemplos de entrenamiento.")
 
-	# Apilar en matrices numpy para entrenamiento
 	x = np.stack(entradas).astype(np.float32)
 	y = np.asarray(labels, dtype=np.int64)
 	return x, y
 
 
-class RedNeuronalOthello:
-	"""Implementación mínima de una red feed-forward para clasificar el resultado desde una posición.
+class RedNeuronalOtelo:
+	"""Red neuronal Keras para clasificar el resultado de una posición de Otelo."""
 
-	Arquitectura configurable vía `dimensiones`. Las activaciones intermedias usan tanh
-	y la salida es softmax sobre 3 clases (LOSS/DRAW/WIN).
-	"""
-	def __init__(self, dimensiones: Sequence[int] = (64, 128, 64, 3), seed: int = 394867) -> None:
-		"""
-		Red neuronal densa simple implementada con numpy.
-		`dimensiones` define el tamaño de cada capa (entrada,...,salida).
-		Se inicializan pesos y sesgos con distribución uniforme (Xavier-like).
-		"""
+	def __init__(self, dimensiones: Sequence[int] = (64, 128, 64, 3), seed: int = 394867, modelo: Any = None) -> None:
+		if tf is None:
+			raise ImportError(
+				"TensorFlow no está disponible en este entorno. Usa un Python compatible con TensorFlow (por ejemplo, 3.13) e instala el paquete tensorflow."
+			) from _TENSORFLOW_IMPORT_ERROR
 		self.dimensiones = list(dimensiones)
-		rag = np.random.default_rng(seed)
-		self.pesos = []
-		self.sesgos = []
-		for entrada, salida in zip(self.dimensiones[:-1], self.dimensiones[1:]):
-			# Inicialización basada en el tamaño de las capas para estabilidad
-			limite = np.sqrt(6.0 / (entrada + salida))
-			self.pesos.append(rag.uniform(-limite, limite, size=(entrada, salida)).astype(np.float32))
-			self.sesgos.append(np.zeros(salida, dtype=np.float32))
+		self.seed = seed
+		self.modelo = modelo if modelo is not None else self._construye_modelo()
 
-	@staticmethod
-	def _tanh(x: np.ndarray) -> np.ndarray:
-		return np.tanh(x)
-
-	@staticmethod
-	def _softmax(logits: np.ndarray) -> np.ndarray:
-		# Estabilizar antes de exp para evitar overflow
-		ajustado = logits - np.max(logits, axis=1, keepdims=True)
-		exp = np.exp(ajustado)
-		return exp / np.sum(exp, axis=1, keepdims=True)
-
-	def _forward(self, x: np.ndarray) -> Tuple[List[np.ndarray], List[np.ndarray]]:
-		"""Propagación hacia delante que devuelve activaciones y pre-activaciones.
-
-		- `activaciones` contiene la salida de cada capa (incluida la entrada)
-		- `preactivaciones` contiene los valores lineales z = Wx + b por capa
-		"""
-		activaciones = [x]
-		preactivaciones: List[np.ndarray] = []
-		capa = x
-		for indice, (peso, sesgo) in enumerate(zip(self.pesos, self.sesgos)):
-			z = capa @ peso + sesgo
-			preactivaciones.append(z)
-			if indice == len(self.pesos) - 1:
-				# Capa de salida: softmax
-				capa = self._softmax(z)
-			else:
-				# Capas ocultas: tanh
-				capa = self._tanh(z)
-			activaciones.append(capa)
-		return activaciones, preactivaciones
+	def _construye_modelo(self):
+		initializer = tf.keras.initializers.GlorotUniform(seed=self.seed)
+		modelo = tf.keras.Sequential(
+			[
+				tf.keras.layers.Input(shape=(self.dimensiones[0],)),
+				tf.keras.layers.Dense(self.dimensiones[1], activation="tanh", kernel_initializer=initializer),
+				tf.keras.layers.Dense(self.dimensiones[2], activation="tanh", kernel_initializer=initializer),
+				tf.keras.layers.Dense(self.dimensiones[3], activation="softmax", kernel_initializer=initializer),
+			]
+		)
+		modelo.compile(
+			optimizer=tf.keras.optimizers.Adam(),
+			loss=tf.keras.losses.SparseCategoricalCrossentropy(),
+			metrics=["accuracy"],
+		)
+		return modelo
 
 	def predict_proba(self, x: np.ndarray) -> np.ndarray:
-		# Devuelve las probabilidades (softmax) para las entradas `x`.
 		x = np.asarray(x, dtype=np.float32)
-		# Aceptar vectores 1D convirtiéndolos en batch de tamaño 1
 		if x.ndim == 1:
 			x = x[None, :]
-		activaciones, _ = self._forward(x)
-		return activaciones[-1]
+		return self.modelo.predict(x, verbose=0)
 
 	def fit(self, x: np.ndarray, y: np.ndarray, epochs: int = 10, batch_size: int = 128, learning_rate: float = 0.01) -> None:
-		"""Entrenamiento por descenso de gradiente estocástico simple.
-
-		- Baraja los ejemplos cada época
-		- Actualiza por lotes (batch)
-		- Imprime accuracy y loss al final de cada época
-		"""
 		x = np.asarray(x, dtype=np.float32)
 		y = np.asarray(y, dtype=np.int64)
 		if len(x) != len(y):
 			raise ValueError("x e y deben tener la misma longitud")
 
-		for epoch in range(1, epochs + 1):
-			perm = np.random.permutation(len(x))
-			x_barajado = x[perm]
-			y_barajado = y[perm]
-
-			for inicio in range(0, len(x_barajado), batch_size):
-				fin = inicio + batch_size
-				lote_x = x_barajado[inicio:fin]
-				lote_y = y_barajado[inicio:fin]
-				self._train_batch(lote_x, lote_y, learning_rate)
-
-			probs = self.predict_proba(x)
-			predicciones = np.argmax(probs, axis=1)
-			accuracy = float(np.mean(predicciones == y))
-			loss = float(self._cross_entropy(probs, y))
-			print(f"Epoch {epoch}/{epochs} - accuracy: {accuracy:.4f} - loss: {loss:.4f}")
+		self.modelo.compile(
+			optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate),
+			loss=tf.keras.losses.SparseCategoricalCrossentropy(),
+			metrics=["accuracy"],
+		)
+		self.modelo.fit(x, y, epochs=epochs, batch_size=batch_size, shuffle=True, verbose=1)
 
 	def _train_batch(self, x: np.ndarray, y: np.ndarray, learning_rate: float) -> None:
-		"""Actualiza pesos y sesgos usando backpropagation (implementación explícita).
-
-		- `delta` contiene el error en la capa de salida y se propaga hacia atrás
-		- Se aplica la derivada de tanh para las capas ocultas
-		"""
-		activaciones, preactivaciones = self._forward(x)
-		probs = activaciones[-1]
-		objetivos = np.eye(self.dimensiones[-1], dtype=np.float32)[y]
-		delta = (probs - objetivos) / max(len(x), 1)
-
-		for indice in reversed(range(len(self.pesos))):
-			entrada = activaciones[indice]
-			peso = self.pesos[indice]
-			grad_pesos = entrada.T @ delta
-			grad_sesgos = np.sum(delta, axis=0)
-
-			# Actualizar parámetros con descenso de gradiente
-			self.pesos[indice] = peso - learning_rate * grad_pesos
-			self.sesgos[indice] = self.sesgos[indice] - learning_rate * grad_sesgos
-
-			if indice > 0:
-				# Propagar delta a la capa anterior aplicando derivada de tanh
-				delta = (delta @ peso.T) * (1.0 - np.tanh(preactivaciones[indice - 1]) ** 2)
+		self.fit(x, y, epochs=1, batch_size=max(len(x), 1), learning_rate=learning_rate)
 
 	@staticmethod
 	def _cross_entropy(probs: np.ndarray, y: np.ndarray) -> float:
-		# Calcula la pérdida de entropía cruzada promedio.
 		indices = np.arange(len(y))
 		probabilidades = np.clip(probs[indices, y], 1e-9, 1.0)
 		return float(-np.mean(np.log(probabilidades)))
 
 	def save(self, ruta: Path) -> None:
-		# Guarda el modelo (dimensiones, pesos y sesgos) a un archivo comprimido .npz.
-		contenido: Dict[str, np.ndarray] = {"dimensiones": np.asarray(self.dimensiones, dtype=np.int64)}
-		for indice, (peso, sesgo) in enumerate(zip(self.pesos, self.sesgos)):
-			contenido[f"peso_{indice}"] = peso
-			contenido[f"sesgo_{indice}"] = sesgo
-		np.savez_compressed(ruta, **contenido)
+		ruta = Path(ruta)
+		if ruta.suffix == "":
+			ruta = ruta.with_suffix(".keras")
+		self.modelo.save(ruta)
 
 	@classmethod
-	def load(cls, ruta: Path) -> "RedNeuronalOthello":
-		# Carga un modelo desde un fichero .npz y devuelve la instancia reconstruida.
-		archivo = np.load(ruta, allow_pickle=False)
-		dimensiones = archivo["dimensiones"].astype(int).tolist()
-		modelo = cls(dimensiones=dimensiones)
-		for indice in range(len(modelo.pesos)):
-			modelo.pesos[indice] = archivo[f"peso_{indice}"]
-			modelo.sesgos[indice] = archivo[f"sesgo_{indice}"]
-		return modelo
+	def load(cls, ruta: Path) -> "RedNeuronalOtelo":
+		if tf is None:
+			raise ImportError(
+				"TensorFlow no está disponible en este entorno. Usa un Python compatible con TensorFlow (por ejemplo, 3.13) e instala el paquete tensorflow."
+			) from _TENSORFLOW_IMPORT_ERROR
+		ruta = Path(ruta)
+		if not ruta.exists() and ruta.suffix == ".npz":
+			ruta = ruta.with_suffix(".keras")
+		modelo = tf.keras.models.load_model(ruta)
+		return cls(modelo=modelo)
 
 
-def selecciona_movimiento(modelo: RedNeuronalOthello, tablero: Sequence[Sequence[int]], jugador: int):
-	"""Selecciona el mejor movimiento según el modelo:
-
-	- Para cada movimiento legal, aplica la jugada en una copia del tablero
-	- Predice la probabilidad y elige el movimiento con mayor score.
-	En este caso se usa la probabilidad de `LABEL_LOSS` como heurística (convención del autor).
-	"""
+def selecciona_movimiento(modelo: RedNeuronalOtelo, tablero: Sequence[Sequence[int]], jugador: int):
 	movimientos = movimientos_legales(tablero, jugador)
 	if not movimientos:
 		return None
@@ -278,13 +190,12 @@ def selecciona_movimiento(modelo: RedNeuronalOthello, tablero: Sequence[Sequence
 	return mejor_movimiento
 
 
-def entrena_modelo(num_partidas: int, epochs: int, batch_size: int, learning_rate: float, ruta_salida: Path) -> RedNeuronalOthello:
-	"""Genera datos y entrena un modelo; guarda el resultado en `ruta_salida`."""
+def entrena_modelo(num_partidas: int, epochs: int, batch_size: int, learning_rate: float, ruta_salida: Path) -> RedNeuronalOtelo:
 	print(f"Generando datos con {num_partidas} partidas aleatorias...")
 	x, y = genera_dataset(num_partidas)
 	print(f"Ejemplos generados: {len(x)}")
 
-	modelo = RedNeuronalOthello()
+	modelo = RedNeuronalOtelo()
 	modelo.fit(x, y, epochs=epochs, batch_size=batch_size, learning_rate=learning_rate)
 	modelo.save(ruta_salida)
 	print(f"Modelo guardado en {ruta_salida}")
@@ -292,15 +203,13 @@ def entrena_modelo(num_partidas: int, epochs: int, batch_size: int, learning_rat
 
 
 def juega_contra_modelo(ruta_modelo: Path) -> None:
-	"""Carga un modelo y juega una partida completa mostrando movimientos por consola."""
-	modelo = RedNeuronalOthello.load(ruta_modelo)
+	modelo = RedNeuronalOtelo.load(ruta_modelo)
 	tablero = nuevo_tablero()
 	jugador = 2
 
 	while True:
 		movimientos = movimientos_legales(tablero, jugador)
 		jugador_oponente = 3 - jugador
-		# Si ambos jugadores no tienen movimientos, partida terminada
 		if not movimientos and not movimientos_legales(tablero, jugador_oponente):
 			break
 
@@ -323,13 +232,7 @@ def juega_contra_modelo(ruta_modelo: Path) -> None:
 
 
 def construye_parser() -> argparse.ArgumentParser:
-	"""Construye el parser de argumentos para la línea de comandos.
-
-	Comandos soportados:
-	- `train`: generar datos y entrenar
-	- `play`: cargar modelo y jugar partida de prueba
-	"""
-	parser = argparse.ArgumentParser(description="Entrena una red neuronal simple para Othello/Reversi.")
+	parser = argparse.ArgumentParser(description="Entrena una red neuronal simple para Otelo.")
 	subparsers = parser.add_subparsers(dest="comando", required=True)
 
 	train_parser = subparsers.add_parser("train", help="Genera datos y entrena el modelo")

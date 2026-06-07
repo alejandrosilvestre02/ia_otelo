@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+import concurrent.futures
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
@@ -7,7 +8,7 @@ import pygame
 
 from otelo import aplicar_movimiento, cuenta_fichas, movimientos_legales, nuevo_tablero
 from algoritmo_uct import selecciona_movimiento
-from entrenamiento import DEFAULT_MODEL_PATH, RedNeuronalOthello
+from entrenamiento import DEFAULT_MODEL_PATH, RedNeuronalOtelo
 
 Position = Tuple[int, int]
 
@@ -28,6 +29,8 @@ class TableroUI:
     BUTTON_HOVER_COLOR = (46, 150, 92)
     BUTTON_TEXT_COLOR = (245, 247, 249)
     AI_MOVE_DELAY_MS = 1500
+    AI_SEARCH_ITERATIONS = 30
+    AI_ROLLOUT_LIMIT = 15
 
 
     CELL_SIZE = 80
@@ -50,12 +53,17 @@ class TableroUI:
         self.legal_moves: Dict[Position, list[Position]] = {}
         self.game_over = False
         self.model_path = DEFAULT_MODEL_PATH
-        self.model: Optional[RedNeuronalOthello] = self._load_model(self.model_path)
-        self.awaiting_selection = True
         self.message = "Pulsa N para jugar como Negro o B para jugar como Blanco."
+        self.model: Optional[RedNeuronalOtelo] = self._load_model(self.model_path)
+        self.awaiting_selection = True
         self.start_button_black: Optional[pygame.Rect] = None
         self.start_button_white: Optional[pygame.Rect] = None
         self.pending_ai_move_at: Optional[int] = None
+        self.ai_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="otelo-ai")
+        self.ai_future: Optional[concurrent.futures.Future[Optional[Tuple[Position, list[Position]]]]] = None
+        self.ai_request_id = 0
+        self.ai_future_request_id = 0
+        self.ai_thinking = False
 
         self._refresh_game_state()
 
@@ -69,15 +77,17 @@ class TableroUI:
         self.screen = pygame.display.set_mode((width, height))
         pygame.display.set_caption("Otelo")
 
-        running = True
-        while running:
-            assert self.clock is not None
-            self.clock.tick(self.FPS)
-            running = self._handle_events()
-            self._update_pending_ai_turn()
-            self.draw_scene()
-
-        pygame.quit()
+        try:
+            running = True
+            while running:
+                assert self.clock is not None
+                self.clock.tick(self.FPS)
+                running = self._handle_events()
+                self._update_pending_ai_turn()
+                self.draw_scene()
+        finally:
+            self.ai_executor.shutdown(wait=False, cancel_futures=True)
+            pygame.quit()
 
     def _handle_events(self) -> bool:
         for event in pygame.event.get():
@@ -146,11 +156,44 @@ class TableroUI:
     def _schedule_ai_turn_if_needed(self) -> None:
         if self.game_over or self.model is None or self.current_player != self.ai_player:
             self.pending_ai_move_at = None
+            self.ai_thinking = False
+            return
+
+        if self.ai_future is not None:
+            self.ai_thinking = True
             return
 
         self.pending_ai_move_at = pygame.time.get_ticks() + self.AI_MOVE_DELAY_MS
 
     def _update_pending_ai_turn(self) -> None:
+        if self.ai_future is not None and self.ai_future.done():
+            future = self.ai_future
+            request_id = self.ai_future_request_id
+            self.ai_future = None
+            self.ai_thinking = False
+
+            if request_id != self.ai_request_id or self.game_over or self.current_player != self.ai_player:
+                return
+
+            try:
+                seleccion = future.result()
+            except Exception as exc:  # pragma: no cover - defensivo
+                self.message = f"Error calculando la jugada de la IA: {exc}"
+                return
+
+            if seleccion is None:
+                self._refresh_game_state()
+                self._schedule_ai_turn_if_needed()
+                return
+
+            movimiento, fichas_volteadas = seleccion
+            aplicar_movimiento(self.board, movimiento, self.current_player, fichas_volteadas)
+            self.current_player = 3 - self.current_player
+            self.message = "La IA ha jugado"
+            self._refresh_game_state()
+            self._schedule_ai_turn_if_needed()
+            return
+
         if self.pending_ai_move_at is None:
             return
 
@@ -158,22 +201,32 @@ class TableroUI:
             return
 
         self.pending_ai_move_at = None
-        self._play_ai_turn_if_needed()
+        self._start_ai_search()
 
-    def _play_ai_turn_if_needed(self) -> None:
+    def _start_ai_search(self) -> None:
         if self.game_over or self.model is None or self.current_player != self.ai_player:
             return
 
-        seleccion = selecciona_movimiento(self.board, self.current_player, modelo=self.model)
-        if seleccion is None:
-            self._refresh_game_state()
+        if self.ai_future is not None:
+            self.ai_thinking = True
             return
 
-        movimiento, fichas_volteadas = seleccion
-        aplicar_movimiento(self.board, movimiento, self.current_player, fichas_volteadas)
-        self.current_player = 3 - self.current_player
-        self.message = "La IA ha jugado"
-        self._refresh_game_state()
+        self.ai_request_id += 1
+        self.ai_future_request_id = self.ai_request_id
+        tablero_snapshot = [fila[:] for fila in self.board]
+        jugador = self.current_player
+        modelo = self.model
+        self.ai_thinking = True
+        self.message = "La IA está pensando..."
+        self.ai_future = self.ai_executor.submit(
+            selecciona_movimiento,
+            tablero_snapshot,
+            jugador,
+            modelo,
+            self.AI_SEARCH_ITERATIONS,
+            1.4,
+            self.AI_ROLLOUT_LIMIT,
+        )
 
     def _reset_game(self) -> None:
         self.board = nuevo_tablero()
@@ -181,6 +234,9 @@ class TableroUI:
         self.game_over = False
         self.message = ""
         self.pending_ai_move_at = None
+        self.ai_future = None
+        self.ai_request_id += 1
+        self.ai_thinking = False
         self._refresh_game_state()
 
         if self.model is not None and self.current_player == self.ai_player:
@@ -203,15 +259,15 @@ class TableroUI:
 
         return False
 
-    def _load_model(self, ruta: Path) -> Optional[RedNeuronalOthello]:
+    def _load_model(self, ruta: Path) -> Optional[RedNeuronalOtelo]:
         if not ruta.exists():
-            return RedNeuronalOthello()
+            return RedNeuronalOtelo()
 
         try:
-            return RedNeuronalOthello.load(ruta)
+            return RedNeuronalOtelo.load(ruta)
         except Exception as exc:  # pragma: no cover - defensivo para errores de carga
             self.message = f"No se pudo cargar el modelo: {exc}"
-            return RedNeuronalOthello()
+            return RedNeuronalOtelo()
 
     def draw_scene(self) -> None:
         if self.screen is None:
@@ -292,6 +348,8 @@ class TableroUI:
             turn_text = "Selecciona color"
         elif self.current_player == self.human_player:
             turn_text = "Tu turno"
+        elif self.ai_thinking or self.ai_future is not None:
+            turn_text = "La IA está pensando"
         elif self.model is not None:
             turn_text = "Turno de la IA"
         else:
