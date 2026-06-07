@@ -157,6 +157,6 @@ def jugar_cli():
 
 
 if __name__ == '__main__':
-	print('Othello / Reversi - juego basico')
+	print('Otelo - juego basico')
 	jugar_cli()
 

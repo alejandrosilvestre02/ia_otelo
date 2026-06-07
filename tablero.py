@@ -6,7 +6,8 @@ from typing import Dict, Optional, Tuple
 import pygame
 
 from otelo import aplicar_movimiento, cuenta_fichas, movimientos_legales, nuevo_tablero
-from entrenamiento import DEFAULT_MODEL_PATH, RedNeuronalOthello, selecciona_movimiento
+from algoritmo_uct import selecciona_movimiento
+from entrenamiento import DEFAULT_MODEL_PATH, RedNeuronalOthello
 
 Position = Tuple[int, int]
 
@@ -163,7 +164,7 @@ class TableroUI:
         if self.game_over or self.model is None or self.current_player != self.ai_player:
             return
 
-        seleccion = selecciona_movimiento(self.model, self.board, self.current_player)
+        seleccion = selecciona_movimiento(self.board, self.current_player, modelo=self.model)
         if seleccion is None:
             self._refresh_game_state()
             return
