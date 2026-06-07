@@ -60,6 +60,49 @@ def hijo_mas_visitado_final(self):
     """elige al hijo más visitado cuando se terminan las iteraciones"""
     return max(self.hijos, key=lambda h: h.n_visitas)
 
+class AgenteUCT:
+    """
+    Agente que usa el algoritmo UCT para elegir movimientos en Otelo.
+
+    Parámetros
+    ----------
+    iteraciones : int    - número de simulaciones por jugada
+    c           : float  - constante de exploración UCB1 (√2 por defecto)
+    red         : objeto con método predecir(tablero) → float ∈ [-1,1]
+                         Si es None, se usa rollout aleatorio.
+    """
+
+    def __init__(self, iteraciones=500, c=math.sqrt(2), red=None):
+        self.iteraciones = iteraciones
+        self.c = c
+        self.red = red
+
+    # ------------------------------------------------------------------
+    # Interfaz pública
+    # ------------------------------------------------------------------
+
+    def elegir_movimiento(self, estado):
+        """
+        Devuelve el mejor movimiento (fila, col) para el jugador del turno.
+        """
+        jugador = estado.turno
+        movs = estado.movimientos_validos(jugador)
+
+        if not movs:
+            return None
+        if len(movs) == 1:
+            return movs[0]
+
+        raiz = Nodo(estado.clonar(), jugador)
+
+        for _ in range(self.iteraciones):
+            nodo = self._seleccionar(raiz)
+            nodo = self._expandir(nodo)
+            recompensa = self._default_policy(nodo)
+            self._retropropagar(nodo, recompensa, jugador)
+
+        return raiz.mejor_hijo_final().movimiento
+
 def tree_policy(self, nodo):
     """
         TREE POLICY: desciende por el árbol usando UCB1 hasta encontrar
@@ -72,11 +115,40 @@ def tree_policy(self, nodo):
             nodo = nodo.best_child(self.c)
     return nodo
 
-def default_policy(estado):
-    while not estado.is_terminal():
-        accion = random.choice(estado.get_valid_actions())
-        estado = estado.apply_action(accion)
-    return estado.get_reward()
+def default_policy(self, nodo):
+    """
+        DEFAULT POLICY: estima la recompensa desde el nodo dado.
+
+        Si hay red neuronal disponible, se usa para predecir el valor
+        del estado actual (evitando la simulación completa).
+        Si no, se realiza un rollout aleatorio hasta el final.
+
+        Devuelve un valor en [-1, 1]:
+           +1  victoria del jugador raíz
+            0  empate
+           -1  derrota del jugador raíz
+        """
+    if self.red is not None:
+        # La red predice desde el punto de vista del jugador activo
+            valor = self.red.predecir(nodo.estado.tablero)
+            # valor ∈ [-1,1]: +1 = victoria del jugador activo en nodo
+            return float(valor)
+   # --- Rollout aleatorio ---
+    estado_sim = nodo.estado.clonar()
+    while not estado_sim.ha_terminado():
+            jugador_sim = estado_sim.turno
+            movs = estado_sim.movimientos_validos(jugador_sim)
+            if movs:
+                mov = random.choice(movs)
+                estado_sim.aplicar_movimiento(*mov)
+            else:
+                break
+
+    ganador = estado_sim.ganador()
+    if ganador is None:
+            return 0.0
+        # La recompensa se devuelve desde el punto de vista del jugador del nodo
+    return 1.0 if ganador == nodo.jugador else -1.0
 
 def expand(self, nodo):
 
