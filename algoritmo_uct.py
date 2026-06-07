@@ -1,9 +1,49 @@
 import math
 import random
 
-tree = {}
-"""return the move in ACTIONS(state) whose node has highest number of playouts
-"""
+from otelo import aplicar_movimiento, cuenta_fichas, movimientos_legales, nuevo_tablero
+from entrenamiento import codifica_tablero, LABEL_WIN, LABEL_LOSS
+
+
+class EstadoOthello:
+    """Envuelve el tablero de listas para que AgenteUCT pueda operar sobre él."""
+
+    def __init__(self, tablero, turno):
+        self.tablero = [fila[:] for fila in tablero]
+        self.turno = turno
+
+    def clonar(self):
+        return EstadoOthello(self.tablero, self.turno)
+
+    def movimientos_validos(self, jugador):
+        return list(movimientos_legales(self.tablero, jugador).items())
+
+    def aplicar_movimiento(self, movimiento, fichas_volteadas):
+        aplicar_movimiento(self.tablero, movimiento, self.turno, fichas_volteadas)
+        # Cambiar turno; si el siguiente no tiene movimientos, mantener el actual
+        siguiente = 3 - self.turno
+        if movimientos_legales(self.tablero, siguiente):
+            self.turno = siguiente
+        elif not movimientos_legales(self.tablero, self.turno):
+            self.turno = None  # partida terminada
+
+    def ha_terminado(self):
+        if self.turno is None:
+            return True
+        if movimientos_legales(self.tablero, self.turno):
+            return False
+        if movimientos_legales(self.tablero, 3 - self.turno):
+            return False
+        return True
+
+    def ganador(self):
+        negro, blanco = cuenta_fichas(self.tablero)
+        if negro > blanco:
+            return 2
+        if blanco > negro:
+            return 1
+        return None
+
 
 class Nodo:
     """
@@ -11,26 +51,25 @@ class Nodo:
 
     Atributos
     ---------
-    estado      : Othello  - copia del estado del juego en este nodo
-    jugador     : int      - jugador que acaba de mover para llegar aquí
-    movimiento  : tuple    - jugada que generó este nodo desde el padre
-    padre       : NodoUCT  - nodo padre (None para la raíz)
-    hijos       : list     - lista de nodos hijo expandidos
-    n_visitas   : int      - número de veces que este nodo ha sido visitado
-    valor       : float    - valor acumulado (suma de recompensas)
-    movs_sin_expandir : list - movimientos del estado aún no explorados
+    estado      : EstadoOthello - copia del estado del juego en este nodo
+    jugador     : int           - jugador que acaba de mover para llegar aquí
+    movimiento  : tuple         - jugada que generó este nodo desde el padre
+    padre       : Nodo          - nodo padre (None para la raíz)
+    hijos       : list          - lista de nodos hijo expandidos
+    n_visitas   : int           - número de veces que este nodo ha sido visitado
+    n_victorias : float         - valor acumulado (suma de recompensas)
+    movs_sin_expandir : list    - movimientos del estado aún no explorados
     """
+
     def __init__(self, estado, jugador, movimiento=None, padre=None):
         self.estado = estado
         self.jugador = jugador
         self.movimiento = movimiento
         self.padre = padre
         self.hijos = []
-        """pag 208, 27/35 -> n_victorias / n_visitas"""
-        self.n_visitas = 0 
+        self.n_visitas = 0
         self.n_victorias = 0.0
-        
-        # Movimientos pendientes de expandir en este nodo
+
         turno_actual = estado.turno
         if turno_actual is not None:
             self.movs_sin_expandir = estado.movimientos_validos(turno_actual)[:]
@@ -38,27 +77,26 @@ class Nodo:
         else:
             self.movs_sin_expandir = []
 
-def nodo_terminal(self):
-    return self.estado.ha_terminado()
+    def es_terminal(self):
+        return self.estado.ha_terminado()
 
-def nodo_completamente_expandido(self):
-    return len(self.movs_sin_expandir) == 0
+    def esta_completamente_expandido(self):
+        return len(self.movs_sin_expandir) == 0
 
-def best_child(self, c=math.squrt(2)):
-    """UCB1 = (valor/visitas) + c * sqrt(ln(N) / n)"""
+    def best_child(self, c=math.sqrt(2)):
+        """UCB1 = (victorias/visitas) + c * sqrt(ln(N) / n)"""
+        def ucb(hijo):
+            if hijo.n_visitas == 0:
+                return float('inf')
+            explotacion = hijo.n_victorias / hijo.n_visitas
+            exploracion = c * math.sqrt(math.log(self.n_visitas) / hijo.n_visitas)
+            return explotacion + exploracion
+        return max(self.hijos, key=ucb)
 
-    def ucb(hijo):
-        if hijo.n_visitas == 0:
-            return float('inf')
-        explotacion = hijo.n_victorias / hijo.n_visitas
-        exploracion = c * math.sqrt(math.log(self.n_visitas) / hijo.n_visitas)
-        return explotacion + exploracion
+    def mejor_hijo_final(self):
+        """Elige al hijo más visitado cuando se terminan las iteraciones."""
+        return max(self.hijos, key=lambda h: h.n_visitas)
 
-    return max(self.hijos, key=ucb)
-
-def hijo_mas_visitado_final(self):
-    """elige al hijo más visitado cuando se terminan las iteraciones"""
-    return max(self.hijos, key=lambda h: h.n_visitas)
 
 class AgenteUCT:
     """
@@ -77,14 +115,8 @@ class AgenteUCT:
         self.c = c
         self.red = red
 
-    # ------------------------------------------------------------------
-    # Interfaz pública
-    # ------------------------------------------------------------------
-
     def elegir_movimiento(self, estado):
-        """
-        Devuelve el mejor movimiento (fila, col) para el jugador del turno.
-        """
+        """Devuelve el mejor movimiento (fila, col) para el jugador del turno."""
         jugador = estado.turno
         movs = estado.movimientos_validos(jugador)
 
@@ -96,28 +128,24 @@ class AgenteUCT:
         raiz = Nodo(estado.clonar(), jugador)
 
         for _ in range(self.iteraciones):
-            nodo = self._seleccionar(raiz)
-            nodo = self._expandir(nodo)
+            nodo = self._tree_policy(raiz)
             recompensa = self._default_policy(nodo)
-            self._retropropagar(nodo, recompensa, jugador)
+            self._backup(nodo, recompensa, jugador)
 
         return raiz.mejor_hijo_final().movimiento
 
-def tree_policy(self, nodo):
-    """
-        TREE POLICY: desciende por el árbol usando UCB1 hasta encontrar
-        un nodo no completamente expandido o terminal.
-        """
-    while not nodo.es_terminal():
-        if not nodo.esta_completamente_expandido():
-            return expand(nodo)
-        else:
-            nodo = nodo.best_child(self.c)
-    return nodo
+    def _tree_policy(self, nodo):
+        """TREE POLICY: desciende por el árbol usando UCB1 hasta encontrar
+        un nodo no completamente expandido o terminal."""
+        while not nodo.es_terminal():
+            if not nodo.esta_completamente_expandido():
+                return self._expand(nodo)
+            else:
+                nodo = nodo.best_child(self.c)
+        return nodo
 
-def default_policy(self, nodo):
-    """
-        DEFAULT POLICY: estima la recompensa desde el nodo dado.
+    def _default_policy(self, nodo):
+        """DEFAULT POLICY: estima la recompensa desde el nodo dado.
 
         Si hay red neuronal disponible, se usa para predecir el valor
         del estado actual (evitando la simulación completa).
@@ -128,54 +156,73 @@ def default_policy(self, nodo):
             0  empate
            -1  derrota del jugador raíz
         """
-    if self.red is not None:
-        # La red predice desde el punto de vista del jugador activo
-            valor = self.red.predecir(nodo.estado.tablero)
-            # valor ∈ [-1,1]: +1 = victoria del jugador activo en nodo
-            return float(valor)
-   # --- Rollout aleatorio ---
-    estado_sim = nodo.estado.clonar()
-    while not estado_sim.ha_terminado():
+        if self.red is not None:
+            # La red predice desde el punto de vista del jugador activo en el nodo
+            entrada = codifica_tablero(nodo.estado.tablero, nodo.jugador)
+            probs = self.red.predict_proba(entrada)[0]
+            # Convertir a escalar en [-1, 1]: P(WIN) - P(LOSS)
+            return float(probs[LABEL_WIN] - probs[LABEL_LOSS])
+
+        # --- Rollout aleatorio ---
+        estado_sim = nodo.estado.clonar()
+        while not estado_sim.ha_terminado():
             jugador_sim = estado_sim.turno
             movs = estado_sim.movimientos_validos(jugador_sim)
             if movs:
-                mov = random.choice(movs)
-                estado_sim.aplicar_movimiento(*mov)
+                mov, fichas = random.choice(movs)
+                estado_sim.aplicar_movimiento(mov, fichas)
             else:
                 break
 
-    ganador = estado_sim.ganador()
-    if ganador is None:
+        ganador = estado_sim.ganador()
+        if ganador is None:
             return 0.0
         # La recompensa se devuelve desde el punto de vista del jugador del nodo
-    return 1.0 if ganador == nodo.jugador else -1.0
+        return 1.0 if ganador == nodo.jugador else -1.0
 
-def expand(self, nodo):
+    def _expand(self, nodo):
+        """EXPANSION: toma un movimiento aún no explorado y crea un hijo."""
+        if nodo.es_terminal() or not nodo.movs_sin_expandir:
+            return nodo
 
-    #EXPANSION: toma un movimiento aún no explorado y crea un hijo.
+        movimiento, fichas_volteadas = nodo.movs_sin_expandir.pop()
+        nuevo_estado = nodo.estado.clonar()
+        nuevo_estado.aplicar_movimiento(movimiento, fichas_volteadas)
 
-    if nodo.es_terminal() or not nodo.movs_sin_expandir: 
-        return nodo
-    
-    movimiento = nodo.movs_sin_expandir.pop()
-    nuevo_estado = nodo.estado.clonar()
-    nuevo_estado.aplicar_movimiento(*movimiento)
-
-# El jugador del nuevo nodo es quien acaba de mover
-    hijo = Nodo(
+        # El jugador del nuevo nodo es quien acaba de mover
+        hijo = Nodo(
             estado=nuevo_estado,
-            jugador=nodo.estado.turno,   # jugador que acaba de mover
+            jugador=nodo.estado.turno,  # jugador que acaba de mover
             movimiento=movimiento,
-            padre=nodo
+            padre=nodo,
         )
-    nodo.hijos.append(hijo)
-    return hijo
+        nodo.hijos.append(hijo)
+        return hijo
 
-def backup(self, nodo, recompensa, jugador_activo):
-    while nodo is not None:
-        nodo.n_visitas += 1
-        if nodo.jugador == jugador_activo:
-            nodo.valor += recompensa
-        else:
-            nodo.valor -= recompensa
-        nodo = nodo.padre
+    def _backup(self, nodo, recompensa, jugador_activo):
+        """BACKUP: propaga la recompensa hacia arriba por el árbol."""
+        while nodo is not None:
+            nodo.n_visitas += 1
+            if nodo.jugador == jugador_activo:
+                nodo.n_victorias += recompensa
+            else:
+                nodo.n_victorias -= recompensa
+            nodo = nodo.padre
+
+
+def selecciona_movimiento(tablero, jugador, modelo=None):
+    """Interfaz para tablero.py: usa AgenteUCT y devuelve (movimiento, fichas_volteadas)."""
+    from otelo import movimientos_legales as ml
+    movimientos = ml(tablero, jugador)
+    if not movimientos:
+        return None
+
+    estado = EstadoOthello(tablero, jugador)
+    agente = AgenteUCT(iteraciones=200, red=modelo)
+    movimiento = agente.elegir_movimiento(estado)
+    if movimiento is None:
+        return None
+
+    # elegir_movimiento devuelve solo (fila, col); recuperamos las fichas del dict
+    fichas_volteadas = movimientos[movimiento]
+    return movimiento, fichas_volteadas
