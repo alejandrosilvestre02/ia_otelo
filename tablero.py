@@ -406,7 +406,7 @@ class TableroUI:
         y = self.HEADER_HEIGHT + row * self.CELL_SIZE
         return pygame.Rect(x, y, self.CELL_SIZE, self.CELL_SIZE)
 
-    def _pixel_to_board(self, pos: Tuple[int, int]) -> Optional[Position]:
+    def pixel_to_board(self, pos: Tuple[int, int]) -> Optional[Position]:
         x, y = pos
         if y < self.HEADER_HEIGHT:
             return None
