@@ -31,7 +31,7 @@ LABEL_LOSS = 0
 LABEL_DRAW = 1
 LABEL_WIN = 2
 
-DEFAULT_MODEL_PATH = Path("modelo_otelo.keras")
+DEFAULT_MODEL_PATH = Path("modelos\modelo_otelo_optimo.keras")
 
 
 # ---------------------------------------------------------
