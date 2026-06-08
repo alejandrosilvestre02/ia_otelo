@@ -68,7 +68,7 @@ def simula_partida_aleatoria() -> Tuple[List[np.ndarray], List[int]]:
 		pasadas_consecutivas = 0
 		historico.append((codifica_tablero(tablero, jugador), jugador))
 		from algoritmo_uct import selecciona_movimiento as seleccion_UCT
-		movimiento, fichas_volteadas = seleccion_UCT(tablero, jugador, modelo=None, iteraciones=50)
+		movimiento, fichas_volteadas = seleccion_UCT(tablero, jugador, modelo=None, iteraciones=50, criterio="robust") #para cambiar criterio del modelo
 		aplicar_movimiento(tablero, movimiento, jugador, fichas_volteadas)
 		jugador = 3 - jugador
 
