@@ -20,7 +20,8 @@ class EstadoOthello:
 
     def aplicar_movimiento(self, movimiento, fichas_volteadas):
         aplicar_movimiento(self.tablero, movimiento, self.turno, fichas_volteadas)
-        # Cambiar turno; si el siguiente no tiene movimientos, mantener el actual
+        # Cambiar turno: si el rival tiene movimientos válidos, se le pasa el turno.
+        # Si no, el mismo jugador continúa; si ninguno puede mover, la partida termina.
         siguiente = 3 - self.turno
         if movimientos_legales(self.tablero, siguiente):
             self.turno = siguiente
@@ -93,13 +94,15 @@ class Nodo:
             return explotacion + exploracion
         return max(self.hijos, key=ucb)
 
-    def mejor_hijo_final(self, criterio): #cambiar criterio para ver otros resultados
+    def mejor_hijo_final(self, criterio):
         """Elige al hijo más visitado cuando se terminan las iteraciones."""
         if criterio == "max":
             return max(self.hijos, key=lambda h: h.n_victorias / h.n_visitas if h.n_visitas > 0 else float('-inf'))
         elif criterio == "robust":
             return max(self.hijos, key=lambda h: h.n_visitas)
         elif criterio == "max-robust":
+            # Se selecciona primero por mayor número de visitas (robustez)
+            # y entre estos el de mejor valor medio.
             max_visitas = max(h.n_visitas for h in self.hijos)
             max_valor = max(h.n_victorias / h.n_visitas if h.n_visitas > 0 else float('-inf') for h in self.hijos)
             candidatos = [h for h in self.hijos
@@ -110,6 +113,8 @@ class Nodo:
                 return candidatos[0]
             return max(self.hijos, key=lambda h: h.n_visitas)
         elif criterio == "secure":
+            # Usa la cota inferior de UCB para escoger el hijo más seguro
+            # con mayor valor mínimo plausible entre los explorados.
             def lower_bound(h):
                 if h.n_visitas == 0:
                     return float('-inf')
@@ -185,6 +190,8 @@ class AgenteUCT:
             return float(probs[LABEL_WIN] - probs[LABEL_LOSS])
 
         # --- Rollout aleatorio ---
+        # Si no hay red, se simula una partida desde el nodo hasta el final
+        # eligiendo movimientos al azar.
         estado_sim = nodo.estado.clonar()
         while not estado_sim.ha_terminado():
             jugador_sim = estado_sim.turno
@@ -196,9 +203,11 @@ class AgenteUCT:
                 break
 
         ganador = estado_sim.ganador()
+        # Si no hay ganador, se considera empate y la recompensa es neutra.
         if ganador is None:
             return 0.0
-        # La recompensa se devuelve desde el punto de vista del jugador del nodo
+        # Si el ganador coincide con el jugador que originó este nodo,
+        # la simulación es buena para él; de lo contrario, es mala.
         return 1.0 if ganador == nodo.jugador else -1.0
 
     def expand(self, nodo):
