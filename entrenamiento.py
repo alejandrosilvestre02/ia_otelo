@@ -67,7 +67,6 @@ def simula_partida_aleatoria() -> Tuple[List[np.ndarray], List[int]]:
 
 		pasadas_consecutivas = 0
 		historico.append((codifica_tablero(tablero, jugador), jugador))
-		# Importar localmente para evitar import circular con algoritmo_uct
 		from algoritmo_uct import selecciona_movimiento as seleccion_UCT
 		movimiento, fichas_volteadas = seleccion_UCT(tablero, jugador, modelo=None, iteraciones=50)
 		aplicar_movimiento(tablero, movimiento, jugador, fichas_volteadas)
@@ -106,9 +105,9 @@ class RedNeuronalOtelo:
 			) from _TENSORFLOW_IMPORT_ERROR
 		self.dimensiones = list(dimensiones)
 		self.seed = seed
-		self.modelo = modelo if modelo is not None else self._construye_modelo()
+		self.modelo = modelo if modelo is not None else self.construye_modelo()
 
-	def _construye_modelo(self):
+	def construye_modelo(self):
 		initializer = tf.keras.initializers.GlorotUniform(seed=self.seed)
 		modelo = tf.keras.Sequential(
 			[
@@ -144,11 +143,11 @@ class RedNeuronalOtelo:
 		)
 		self.modelo.fit(x, y, epochs=epochs, batch_size=batch_size, shuffle=True, verbose=1)
 
-	def _train_batch(self, x: np.ndarray, y: np.ndarray, learning_rate: float) -> None:
+	def train_batch(self, x: np.ndarray, y: np.ndarray, learning_rate: float) -> None:
 		self.fit(x, y, epochs=1, batch_size=max(len(x), 1), learning_rate=learning_rate)
 
 	@staticmethod
-	def _cross_entropy(probs: np.ndarray, y: np.ndarray) -> float:
+	def cross_entropy(probs: np.ndarray, y: np.ndarray) -> float:
 		indices = np.arange(len(y))
 		probabilidades = np.clip(probs[indices, y], 1e-9, 1.0)
 		return float(-np.mean(np.log(probabilidades)))
@@ -220,9 +219,7 @@ def juega_contra_modelo(ruta_modelo: Path) -> None:
 			jugador = jugador_oponente
 			continue
 
-		# Importar localmente la selección por UCT para evitar import circular
-		from algoritmo_uct import selecciona_movimiento as seleccion_UCT
-		seleccion = seleccion_UCT(tablero, jugador, modelo=modelo)
+		seleccion = selecciona_movimiento(modelo, tablero, jugador)
 		assert seleccion is not None
 		movimiento, fichas_volteadas = seleccion
 		color = "Negro" if jugador == 2 else "Blanco"

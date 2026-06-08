@@ -1,4 +1,4 @@
-"""Juego Othello / Reversi - implementación básica y CLI en español.
+"""Juego Otelo implementación básica.
 
 Uso: ejecutar `python otelo.py` y seguir las instrucciones.
 """

@@ -28,7 +28,6 @@ class TableroUI:
     BUTTON_COLOR = (36, 124, 76)
     BUTTON_HOVER_COLOR = (46, 150, 92)
     BUTTON_TEXT_COLOR = (245, 247, 249)
-    AI_MOVE_DELAY_MS = 1500
     AI_SEARCH_ITERATIONS = 30
     AI_ROLLOUT_LIMIT = 15
 
@@ -54,7 +53,7 @@ class TableroUI:
         self.game_over = False
         self.model_path = DEFAULT_MODEL_PATH
         self.message = "Pulsa N para jugar como Negro o B para jugar como Blanco."
-        self.model: Optional[RedNeuronalOtelo] = self._load_model(self.model_path)
+        self.model: Optional[RedNeuronalOtelo] = self.load_model(self.model_path)
         self.awaiting_selection = True
         self.start_button_black: Optional[pygame.Rect] = None
         self.start_button_white: Optional[pygame.Rect] = None
@@ -65,7 +64,7 @@ class TableroUI:
         self.ai_future_request_id = 0
         self.ai_thinking = False
 
-        self._refresh_game_state()
+        self.refresh_game_state()
 
     def run(self) -> None:
         """Inicializa pygame y ejecuta el bucle principal del juego."""
@@ -82,14 +81,14 @@ class TableroUI:
             while running:
                 assert self.clock is not None
                 self.clock.tick(self.FPS)
-                running = self._handle_events()
-                self._update_pending_ai_turn()
+                running = self.handle_events()
+                self.update_pending_ai_turn()
                 self.draw_scene()
         finally:
             self.ai_executor.shutdown(wait=False, cancel_futures=True)
             pygame.quit()
 
-    def _handle_events(self) -> bool:
+    def handle_events(self) -> bool:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 return False
@@ -97,19 +96,19 @@ class TableroUI:
                 if event.key == pygame.K_ESCAPE:
                     return False
                 if event.key == pygame.K_r:
-                    self._reset_game()
+                    self.reset_game()
                 if self.awaiting_selection:
                     if event.key == pygame.K_n:
-                        self._start_match(human_player=2)
+                        self.start_match(human_player=2)
                     elif event.key == pygame.K_b:
-                        self._start_match(human_player=1)
+                        self.start_match(human_player=1)
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                self._handle_click(event.pos)
+                self.handle_click(event.pos)
         return True
 
-    def _handle_click(self, pos: Tuple[int, int]) -> None:
+    def handle_click(self, pos: Tuple[int, int]) -> None:
         if self.awaiting_selection:
-            if self._handle_start_screen_click(pos):
+            if self.handle_start_screen_click(pos):
                 return
             return
 
@@ -127,10 +126,10 @@ class TableroUI:
         aplicar_movimiento(self.board, board_pos, self.current_player, self.legal_moves[board_pos])
         self.current_player = 3 - self.current_player
         self.message = ""
-        self._refresh_game_state()
-        self._schedule_ai_turn_if_needed()
+        self.refresh_game_state()
+        self.schedule_ai_turn_if_needed()
 
-    def _refresh_game_state(self) -> None:
+    def refresh_game_state(self) -> None:
         self.legal_moves = movimientos_legales(self.board, self.current_player)
         if self.legal_moves:
             return
@@ -153,7 +152,7 @@ class TableroUI:
             resultado = "Empate"
         self.message = f"Fin de partida — {resultado}"
 
-    def _schedule_ai_turn_if_needed(self) -> None:
+    def schedule_ai_turn_if_needed(self) -> None:
         if self.game_over or self.model is None or self.current_player != self.ai_player:
             self.pending_ai_move_at = None
             self.ai_thinking = False
@@ -165,7 +164,7 @@ class TableroUI:
 
         self.pending_ai_move_at = pygame.time.get_ticks() + self.AI_MOVE_DELAY_MS
 
-    def _update_pending_ai_turn(self) -> None:
+    def update_pending_ai_turn(self) -> None:
         if self.ai_future is not None and self.ai_future.done():
             future = self.ai_future
             request_id = self.ai_future_request_id
@@ -182,16 +181,16 @@ class TableroUI:
                 return
 
             if seleccion is None:
-                self._refresh_game_state()
-                self._schedule_ai_turn_if_needed()
+                self.refresh_game_state()
+                self.schedule_ai_turn_if_needed()
                 return
 
             movimiento, fichas_volteadas = seleccion
             aplicar_movimiento(self.board, movimiento, self.current_player, fichas_volteadas)
             self.current_player = 3 - self.current_player
             self.message = "La IA ha jugado"
-            self._refresh_game_state()
-            self._schedule_ai_turn_if_needed()
+            self.refresh_game_state()
+            self.schedule_ai_turn_if_needed()
             return
 
         if self.pending_ai_move_at is None:
@@ -201,9 +200,9 @@ class TableroUI:
             return
 
         self.pending_ai_move_at = None
-        self._start_ai_search()
+        self.start_ai_search()
 
-    def _start_ai_search(self) -> None:
+    def start_ai_search(self) -> None:
         if self.game_over or self.model is None or self.current_player != self.ai_player:
             return
 
@@ -228,7 +227,7 @@ class TableroUI:
             self.AI_ROLLOUT_LIMIT,
         )
 
-    def _reset_game(self) -> None:
+    def reset_game(self) -> None:
         self.board = nuevo_tablero()
         self.current_player = 2
         self.game_over = False
@@ -237,29 +236,29 @@ class TableroUI:
         self.ai_future = None
         self.ai_request_id += 1
         self.ai_thinking = False
-        self._refresh_game_state()
+        self.refresh_game_state()
 
         if self.model is not None and self.current_player == self.ai_player:
-            self._schedule_ai_turn_if_needed()
+            self.schedule_ai_turn_if_needed()
 
-    def _start_match(self, human_player: int) -> None:
+    def start_match(self, human_player: int) -> None:
         self.human_player = human_player
         self.ai_player = 3 - human_player
         self.awaiting_selection = False
-        self._reset_game()
+        self.reset_game()
 
-    def _handle_start_screen_click(self, pos: Tuple[int, int]) -> bool:
+    def handle_start_screen_click(self, pos: Tuple[int, int]) -> bool:
         if self.start_button_black and self.start_button_black.collidepoint(pos):
-            self._start_match(human_player=2)
+            self.start_match(human_player=2)
             return True
 
         if self.start_button_white and self.start_button_white.collidepoint(pos):
-            self._start_match(human_player=1)
+            self.start_match(human_player=1)
             return True
 
         return False
 
-    def _load_model(self, ruta: Path) -> Optional[RedNeuronalOtelo]:
+    def load_model(self, ruta: Path) -> Optional[RedNeuronalOtelo]:
         if not ruta.exists():
             return RedNeuronalOtelo()
 
