@@ -149,9 +149,9 @@ class AgenteUCT:
         raiz = Nodo(estado.clonar(), jugador)
 
         for _ in range(self.iteraciones):
-            nodo = self._tree_policy(raiz)
-            recompensa = self._default_policy(nodo)
-            self._backup(nodo, recompensa, jugador)
+            nodo = self.tree_policy(raiz)
+            recompensa = self.default_policy(nodo)
+            self.backup(nodo, recompensa, jugador)
 
         return raiz.mejor_hijo_final(criterio=self.criterio).movimiento
 
@@ -160,7 +160,7 @@ class AgenteUCT:
         un nodo no completamente expandido o terminal."""
         while not nodo.es_terminal():
             if not nodo.esta_completamente_expandido():
-                return self._expand(nodo)
+                return self.expand(nodo)
             else:
                 nodo = nodo.best_child(self.c)
         return nodo
