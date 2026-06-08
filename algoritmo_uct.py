@@ -93,9 +93,28 @@ class Nodo:
             return explotacion + exploracion
         return max(self.hijos, key=ucb)
 
-    def mejor_hijo_final(self):
+    def mejor_hijo_final(self, criterio): #cambiar criterio para ver otros resultados
         """Elige al hijo más visitado cuando se terminan las iteraciones."""
-        return max(self.hijos, key=lambda h: h.n_visitas)
+        if criterio == "max":
+            return max(self.hijos, key=lambda h: h.n_victorias / h.n_visitas if h.n_visitas > 0 else float('-inf'))
+        elif criterio == "robust":
+            return max(self.hijos, key=lambda h: h.n_visitas)
+        elif criterio == "max-robust":
+            max_visitas = max(h.n_visitas for h in self.hijos)
+            max_valor = max(h.n_victorias / h.n_visitas if h.n_visitas > 0 else float('-inf') for h in self.hijos)
+            candidatos = [h for h in self.hijos
+                        if h.n_visitas == max_visitas
+                        and h.n_visitas > 0
+                        and h.n_victorias / h.n_visitas == max_valor]
+            if candidatos:
+                return candidatos[0]
+            return max(self.hijos, key=lambda h: h.n_visitas)
+        elif criterio == "secure":
+            def lower_bound(h):
+                if h.n_visitas == 0:
+                    return float('-inf')
+                return h.n_victorias / h.n_visitas - math.sqrt(2) * math.sqrt(math.log(self.n_visitas) / h.n_visitas)
+            return max(self.hijos, key=lower_bound)
 
 
 class AgenteUCT:
@@ -110,11 +129,12 @@ class AgenteUCT:
                          Si es None, se usa rollout aleatorio.
     """
 
-    def __init__(self, iteraciones=500, c=math.sqrt(2), red=None, rollout_limite=60):
+    def __init__(self, iteraciones=500, c=math.sqrt(2), red=None, rollout_limite=60, criterio="max"):
         self.iteraciones = iteraciones
         self.c = c
         self.red = red
         self.rollout_limite = rollout_limite
+        self.criterio = criterio
 
     def elegir_movimiento(self, estado):
         """Devuelve el mejor movimiento (fila, col) para el jugador del turno."""
@@ -129,23 +149,23 @@ class AgenteUCT:
         raiz = Nodo(estado.clonar(), jugador)
 
         for _ in range(self.iteraciones):
-            nodo = self._tree_policy(raiz)
-            recompensa = self._default_policy(nodo)
-            self._backup(nodo, recompensa, jugador)
+            nodo = self.tree_policy(raiz)
+            recompensa = self.default_policy(nodo)
+            self.backup(nodo, recompensa, jugador)
 
-        return raiz.mejor_hijo_final().movimiento
+        return raiz.mejor_hijo_final(criterio=self.criterio).movimiento
 
-    def _tree_policy(self, nodo):
+    def tree_policy(self, nodo):
         """TREE POLICY: desciende por el árbol usando UCB1 hasta encontrar
         un nodo no completamente expandido o terminal."""
         while not nodo.es_terminal():
             if not nodo.esta_completamente_expandido():
-                return self._expand(nodo)
+                return self.expand(nodo)
             else:
                 nodo = nodo.best_child(self.c)
         return nodo
 
-    def _default_policy(self, nodo):
+    def default_policy(self, nodo):
         """DEFAULT POLICY: estima la recompensa desde el nodo dado.
 
         Si hay red neuronal disponible, se usa para predecir el valor
@@ -181,7 +201,7 @@ class AgenteUCT:
         # La recompensa se devuelve desde el punto de vista del jugador del nodo
         return 1.0 if ganador == nodo.jugador else -1.0
 
-    def _expand(self, nodo):
+    def expand(self, nodo):
         """EXPANSION: toma un movimiento aún no explorado y crea un hijo."""
         if nodo.es_terminal() or not nodo.movs_sin_expandir:
             return nodo
@@ -200,7 +220,7 @@ class AgenteUCT:
         nodo.hijos.append(hijo)
         return hijo
 
-    def _backup(self, nodo, recompensa, jugador_activo):
+    def backup(self, nodo, recompensa, jugador_activo):
         """BACKUP: propaga la recompensa hacia arriba por el árbol."""
         while nodo is not None:
             nodo.n_visitas += 1
@@ -211,7 +231,7 @@ class AgenteUCT:
             nodo = nodo.padre
 
 
-def selecciona_movimiento(tablero, jugador, modelo=None, iteraciones=200, c=math.sqrt(2), rollout_limite=60):
+def selecciona_movimiento(tablero, jugador, modelo=None, iteraciones=200, c=math.sqrt(2), rollout_limite=60, criterio="max"):
     """Interfaz para tablero.py: usa AgenteUCT y devuelve (movimiento, fichas_volteadas)."""
     from otelo import movimientos_legales as ml
     movimientos = ml(tablero, jugador)
@@ -219,7 +239,7 @@ def selecciona_movimiento(tablero, jugador, modelo=None, iteraciones=200, c=math
         return None
 
     estado = EstadoOthello(tablero, jugador)
-    agente = AgenteUCT(iteraciones=iteraciones, c=c, red=modelo, rollout_limite=rollout_limite)
+    agente = AgenteUCT(iteraciones=iteraciones, c=c, red=modelo, rollout_limite=rollout_limite, criterio=criterio)
     movimiento = agente.elegir_movimiento(estado)
     if movimiento is None:
         return None
