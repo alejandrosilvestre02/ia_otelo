@@ -30,6 +30,7 @@ class TableroUI:
     BUTTON_TEXT_COLOR = (245, 247, 249)
     AI_SEARCH_ITERATIONS = 30
     AI_ROLLOUT_LIMIT = 15
+    AI_MOVE_DELAY_MS = 0
 
 
     CELL_SIZE = 80
@@ -115,7 +116,7 @@ class TableroUI:
         if self.game_over or self.awaiting_selection or self.current_player != self.human_player:
             return
 
-        board_pos = self._pixel_to_board(pos)
+        board_pos = self.pixel_to_board(pos)
         if board_pos is None:
             return
 
@@ -406,7 +407,7 @@ class TableroUI:
         y = self.HEADER_HEIGHT + row * self.CELL_SIZE
         return pygame.Rect(x, y, self.CELL_SIZE, self.CELL_SIZE)
 
-    def _pixel_to_board(self, pos: Tuple[int, int]) -> Optional[Position]:
+    def pixel_to_board(self, pos: Tuple[int, int]) -> Optional[Position]:
         x, y = pos
         if y < self.HEADER_HEIGHT:
             return None
