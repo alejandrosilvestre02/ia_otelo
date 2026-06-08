@@ -33,5 +33,3 @@ Si existe `modelo_otelo.keras` en la raíz del proyecto, `tablero.py` lo carga y
 ```bash
 python tablero.py
 ```
-
-Al arrancar, pulsa `N` para jugar como Negro o `B` para jugar como Blanco.
