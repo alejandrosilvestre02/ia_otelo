@@ -67,7 +67,9 @@ def simula_partida_aleatoria() -> Tuple[List[np.ndarray], List[int]]:
 
 		pasadas_consecutivas = 0
 		historico.append((codifica_tablero(tablero, jugador), jugador))
-		movimiento, fichas_volteadas = list(movimientos.items())[np.random.randint(len(movimientos))]
+		# Importar localmente para evitar import circular con algoritmo_uct
+		from algoritmo_uct import selecciona_movimiento as seleccion_UCT
+		movimiento, fichas_volteadas = seleccion_UCT(tablero, jugador, modelo=None, iteraciones=50)
 		aplicar_movimiento(tablero, movimiento, jugador, fichas_volteadas)
 		jugador = 3 - jugador
 
@@ -218,7 +220,9 @@ def juega_contra_modelo(ruta_modelo: Path) -> None:
 			jugador = jugador_oponente
 			continue
 
-		seleccion = selecciona_movimiento(modelo, tablero, jugador)
+		# Importar localmente la selección por UCT para evitar import circular
+		from algoritmo_uct import selecciona_movimiento as seleccion_UCT
+		seleccion = seleccion_UCT(tablero, jugador, modelo=modelo)
 		assert seleccion is not None
 		movimiento, fichas_volteadas = seleccion
 		color = "Negro" if jugador == 2 else "Blanco"
